@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Coral Reef — Graphics Pipeline Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #000d1a;
+      color: #cce8ff;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px;
+    }
+
+    h1 {
+      font-size: 20px;
+      font-weight: 500;
+      color: #7ef7e8;
+      margin-bottom: 4px;
+      letter-spacing: 0.03em;
+    }
+
+    .subtitle {
+      font-size: 12px;
+      color: #558aaa;
+      margin-bottom: 12px;
+      font-family: monospace;
+    }
+
+    /* ── Canvas wrapper ── */
+    #wrapper {
+      position: relative;
+      width: 100%;
+      max-width: 900px;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      border-radius: 10px;
+      border: 1px solid #0a3060;
+    }
+
+    /* ── HUD overlay ── */
+    #hud {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0, 10, 30, 0.7);
+      color: #7ef7e8;
+      font-size: 11px;
+      font-family: monospace;
+      padding: 8px 12px;
+      border-radius: 8px;
+      line-height: 2;
+      pointer-events: none;
+      border: 1px solid rgba(126, 247, 232, 0.2);
+    }
+
+    /* ── Pipeline stage legend overlay ── */
+    #pipeline-legend {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(0, 10, 30, 0.7);
+      font-size: 11px;
+      font-family: monospace;
+      padding: 8px 12px;
+      border-radius: 8px;
+      line-height: 2;
+      pointer-events: none;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .stage-app   { color: #FFD93D; }
+    .stage-geo   { color: #5EFCE8; }
+    .stage-rast  { color: #FF6B6B; }
+
+    /* ── Controls bar ── */
+    #controls {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+      flex-wrap: wrap;
+      justify-content: center;
+      max-width: 900px;
+      width: 100%;
+    }
+
+    button {
+      font-size: 13px;
+      padding: 6px 16px;
+      cursor: pointer;
+      background: transparent;
+      border: 1px solid #1a5080;
+      color: #7ef7e8;
+      border-radius: 6px;
+      transition: background 0.15s;
+      font-family: monospace;
+    }
+
+    button:hover   { background: rgba(126, 247, 232, 0.12); }
+    button.active  { background: rgba(126, 247, 232, 0.25); border-color: #7ef7e8; }
+
+    /* ── Stage annotations panel ── */
+    #annotations {
+      max-width: 900px;
+      width: 100%;
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 10px;
+    }
+
+    .ann-card {
+      background: rgba(0, 20, 45, 0.85);
+      border-radius: 8px;
+      padding: 12px 14px;
+      border: 1px solid rgba(255,255,255,0.08);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .ann-card h3 {
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 6px;
+      font-family: monospace;
+    }
+
+    .ann-card p { color: #7a9abb; }
+    .ann-card code {
+      background: rgba(255,255,255,0.07);
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 11px;
+      color: #c8e6ff;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>🐠 Coral Reef — Graphics Pipeline Demo</h1>
+  <p class="subtitle">HTML5 Canvas · Application → Geometry → Rasterization</p>
+
+  <div id="wrapper">
+    <canvas id="reef" width="900" height="520"></canvas>
+
+    <!-- HUD -->
+    <div id="hud">
+      🐠 Fish: <span id="stat-fish">0</span><br>
+      🪼 Jellyfish: <span id="stat-jelly">0</span><br>
+      ⏱ Frame: <span id="stat-frame">0</span>
+    </div>
+
+    <!-- Pipeline legend -->
+    <div id="pipeline-legend">
+      <div class="stage-app">  ① Application Stage</div>
+      <div class="stage-geo">  ② Geometry Stage</div>
+      <div class="stage-rast"> ③ Rasterization Stage</div>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div id="controls">
+    <button id="btn-pause">⏸ Pause</button>
+    <button id="btn-fish">+ Fish</button>
+    <button id="btn-jelly">+ Jellyfish</button>
+    <button id="btn-wire">Wireframe Mode</button>
+  </div>
+
+  <!-- Stage annotation cards -->
+  <div id="annotations">
+    <div class="ann-card">
+      <h3 class="stage-app">① Application Stage</h3>
+      <p>
+        Runs each frame on the CPU. Updates fish <code>x/y</code> position,
+        velocity, wobble, tail phase, jellyfish drift and pulse, bubble
+        respawning, and all scene-level logic. This is where game/simulation
+        state lives before anything is drawn.
+      </p>
+    </div>
+    <div class="ann-card">
+      <h3 class="stage-geo">② Geometry Stage</h3>
+      <p>
+        Computes per-object transforms: fish orientation derived from velocity
+        vector, jellyfish pulse deformation via sine, coral sway offset, and
+        frustum culling — objects outside the canvas are skipped before
+        rasterization begins.
+      </p>
+    </div>
+    <div class="ann-card">
+      <h3 class="stage-rast">③ Rasterization Stage</h3>
+      <p>
+        Converts geometry to pixels using painter's algorithm (back→front):
+        background → coral → seabed → bubbles → jellyfish → fish. Toggle
+        <strong>Wireframe Mode</strong> to expose the raw geometric primitives
+        before fill/shading is applied.
+      </p>
+    </div>
+  </div>
+
+  <script>
+    // ============================================================
+    // GRAPHICS PIPELINE DEMO — Colorful Coral Reef
+    //
+    // Three explicit stages demonstrated:
+    //
+    //  ① APPLICATION STAGE  — CPU simulation: object state, physics,
+    //                          animation timers, input handling
+    //
+    //  ② GEOMETRY STAGE     — Per-frame transforms: orientation from
+    //                          velocity, deformation, culling
+    //
+    //  ③ RASTERIZATION STAGE— Canvas 2D draw calls: primitives →
+    //                          pixels, painter's algorithm ordering
+    // ============================================================
+
+    const canvas = document.getElementById('reef');
+    const ctx    = canvas.getContext('2d');
+    const W = canvas.width;
+    const H = canvas.height;
+
+    // ── Toggles (set by UI controls) ──────────────────────────
+    let paused    = false;
+    let wireframe = false;
+    let frameCount = 0;
+
+    // ──────────────────────────────────────────────────────────
+    // SHARED MATH HELPERS
+    // Used across geometry and rasterization stages
+    // ──────────────────────────────────────────────────────────
+    function lerp(a, b, t) { return a + (b - a) * t; }
+
+    // ──────────────────────────────────────────────────────────
+    // ① APPLICATION STAGE — Object factories
+    // Each factory defines the initial simulation state
+    // for a scene object (position, velocity, appearance)
+    // ──────────────────────────────────────────────────────────
+
+    function makeFish(x, y) {
+      const palettes = [
+        ['#FF6B35', '#FFB347'],
+        ['#FF4F8B', '#FF99CC'],
+        ['#00C9A7', '#5EFCE8'],
+        ['#FFC300', '#FFE066'],
+        ['#845EC2', '#D5AAFF'],
+        ['#F9844A', '#F9C74F'],
+        ['#43AA8B', '#90E0EF'],
+      ];
+      const c = palettes[Math.floor(Math.random() * palettes.length)];
+      return {
+        // APPLICATION: position and velocity (world space)
+        x:    x  ?? Math.random() * W,
+        y:    y  ?? 80 + Math.random() * (H - 200),
+        vx:   (Math.random() - 0.5) * 1.8,
+        vy:   (Math.random() - 0.45) * 0.4,
+        // APPLICATION: appearance & animation timers
+        size:         16 + Math.random() * 20,
+        bodyColor:    c[0],
+        finColor:     c[1],
+        wobble:       Math.random() * Math.PI * 2,
+        wobbleSpeed:  0.04 + Math.random() * 0.03,
+        tailPhase:    Math.random() * Math.PI * 2,
+        tailSpeed:    0.10 + Math.random() * 0.07,
+      };
+    }
+
+    function makeJellyfish(x, y) {
+      const palettes = [
+        ['#D45BFF', '#FF9CEE'],
+        ['#5BD4FF', '#BEFFF7'],
+        ['#FF5BD4', '#FFB3EE'],
+        ['#5BFFB3', '#BEFFF5'],
+        ['#FF8C5B', '#FFD4BE'],
+      ];
+      const c = palettes[Math.floor(Math.random() * palettes.length)];
+      return {
+        x:              x ?? Math.random() * W,
+        y:              y ?? 100 + Math.random() * (H - 250),
+        vy:             -0.25 - Math.random() * 0.35,
+        vx:             (Math.random() - 0.5) * 0.3,
+        size:           22 + Math.random() * 22,
+        bodyColor:      c[0],
+        tentacleColor:  c[1],
+        pulsePhase:     Math.random() * Math.PI * 2,
+        pulseSpeed:     0.035 + Math.random() * 0.025,
+        opacity:        0.70 + Math.random() * 0.25,
+        tentacleCount:  5 + Math.floor(Math.random() * 4),
+      };
+    }
+
+    function makeCoral(x) {
+      const types  = ['branch', 'fan', 'tube'];
+      const colors = ['#FF3E6B','#FF9933','#B24BF3','#00BFA5','#FF6B6B','#FFD93D','#3DFFCF'];
+      return {
+        x:          x ?? Math.random() * W,
+        y:          H,
+        type:       types[Math.floor(Math.random() * types.length)],
+        color:      colors[Math.floor(Math.random() * colors.length)],
+        height:     45 + Math.random() * 75,
+        width:      16 + Math.random() * 32,
+        swayPhase:  Math.random() * Math.PI * 2,
+        swaySpeed:  0.008 + Math.random() * 0.012,
+        swayAmt:    1.0 + Math.random() * 2.5,
+      };
+    }
+
+    function makeBubble() {
+      return {
+        x:       Math.random() * W,
+        y:       H + 10,
+        r:       1.5 + Math.random() * 5,
+        vy:      -0.45 - Math.random() * 0.85,
+        vx:      (Math.random() - 0.5) * 0.35,
+        opacity: 0.25 + Math.random() * 0.45,
+      };
+    }
+
+    // ── Initial scene population ───────────────────────────
+    // APPLICATION: seed the world with objects
+    let fish    = Array.from({ length: 7 },  ()    => makeFish());
+    let jellies = Array.from({ length: 4 },  ()    => makeJellyfish());
+    let corals  = Array.from({ length: 20 }, (_, i) => makeCoral(15 + i * (W / 19)));
+    let bubbles = Array.from({ length: 35 }, makeBubble);
+
+    // Static scene elements
+    const rocks = Array.from({ length: 14 }, () => ({
+      x:     Math.random() * W,
+      w:     22 + Math.random() * 55,
+      h:     10 + Math.random() * 28,
+      color: `hsl(${208 + Math.random() * 28}, 20%, ${22 + Math.random() * 18}%)`,
+    }));
+
+    const sunrays = Array.from({ length: 9 }, (_, i) => ({
+      x:     60 + i * 95,
+      phase: Math.random() * Math.PI * 2,
+      speed: 0.004 + Math.random() * 0.005,
+      width: 18 + Math.random() * 45,
+    }));
+
+    // ──────────────────────────────────────────────────────────
+    // ② GEOMETRY STAGE — Per-frame transform computations
+    // These run BEFORE any draw calls, calculating world-space
+    // orientation, deformation, culling, and offsets
+    // ──────────────────────────────────────────────────────────
+
+    // Fish: derive facing direction and tilt from velocity vector
+    // (this is equivalent to building a local orientation matrix)
+    function getFishTransform(f) {
+      const facing = f.vx < 0 ? -1 : 1;                   // horizontal flip
+      const tilt   = Math.atan2(f.vy, Math.abs(f.vx)) * 0.4; // pitch tilt
+      return { facing, tilt };
+    }
+
+    // Jellyfish: sinusoidal scale deformation in model space
+    // (dome contracts/expands — vertex-level geometry change)
+    function getJellyPulse(j, t) {
+      return 0.82 + 0.18 * Math.sin(j.pulsePhase + t * j.pulseSpeed);
+    }
+
+    // Coral: lateral displacement applied to the root transform
+    // (simulates current — moves all vertices uniformly)
+    function getCoralSway(c, t) {
+      return Math.sin(c.swayPhase + t * c.swaySpeed) * c.swayAmt;
+    }
+
+    // Frustum culling: returns false for objects entirely off-canvas
+    // (GEOMETRY STAGE: clip before rasterization)
+    function isFishVisible(f) {
+      return f.x > -100 && f.x < W + 100 && f.y > -50 && f.y < H + 50;
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // ③ RASTERIZATION STAGE — Draw functions
+    // Convert geometric primitives to colored pixels on the canvas.
+    // Ordered back-to-front (painter's algorithm).
+    // ──────────────────────────────────────────────────────────
+
+    // --- Background & light rays ---
+    function rasterizeBackground(t) {
+      // RASTERIZATION: scanline gradient fill (sky→deep)
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0,    '#001428');
+      grad.addColorStop(0.35, '#002850');
+      grad.addColorStop(1,    '#000e1a');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+
+      // RASTERIZATION: animated sunray triangles (alpha-blended)
+      sunrays.forEach(ray => {
+        const alpha = 0.025 + 0.022 * Math.sin(ray.phase + t * ray.speed);
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle   = '#88E8FF';
+        ctx.beginPath();
+        ctx.moveTo(ray.x, 0);
+        ctx.lineTo(ray.x - ray.width, H);
+        ctx.lineTo(ray.x + ray.width, H);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      });
+    }
+
+    // --- Seabed ---
+    function rasterizeSeabed() {
+      // RASTERIZATION: layered floor using filled rects + ellipses
+      ctx.fillStyle = '#071a30';
+      ctx.fillRect(0, H - 32, W, 32);
+
+      ctx.fillStyle = '#0b2240';
+      ctx.beginPath();
+      ctx.ellipse(W / 2, H + 12, W * 0.65, 44, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Rocks
+      rocks.forEach(r => {
+        ctx.fillStyle = r.color;
+        ctx.beginPath();
+        ctx.ellipse(r.x, H - 16, r.w / 2, r.h / 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    // --- Coral (3 procedural types) ---
+    function rasterizeCoral(c, sway) {
+      // RASTERIZATION: procedural coral geometry drawn as primitives
+      ctx.save();
+      ctx.translate(c.x + sway, c.y);   // apply geometry-stage sway offset
+      ctx.strokeStyle = c.color;
+      ctx.fillStyle   = c.color;
+
+      if (c.type === 'branch') {
+        // Recursive branching — stroke paths represent "vertices"
+        function branch(x, y, len, angle, depth) {
+          if (depth === 0 || len < 3) return;
+          const ex = x + Math.cos(angle) * len;
+          const ey = y + Math.sin(angle) * len;
+          ctx.lineWidth = depth * 1.3;
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(ex, ey);
+          ctx.stroke();
+          branch(ex, ey, len * 0.65, angle - 0.42, depth - 1);
+          branch(ex, ey, len * 0.65, angle + 0.42, depth - 1);
+          if (depth === 2) {
+            // Polyp tips
+            ctx.fillStyle = '#fff';
+            ctx.globalAlpha = 0.6;
+            ctx.beginPath();
+            ctx.arc(ex, ey, 2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = c.color;
+            ctx.globalAlpha = 1;
+          }
+        }
+        branch(0, 0, c.height * 0.48, -Math.PI / 2, 5);
+
+      } else if (c.type === 'fan') {
+        // Fan coral: radiating stroke lines + semi-transparent arc
+        for (let i = 0; i < 8; i++) {
+          const a = -Math.PI + (i / 7) * Math.PI;
+          ctx.globalAlpha = 0.55;
+          ctx.lineWidth   = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.lineTo(Math.cos(a) * c.height, Math.sin(a) * c.height);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 0.18;
+        ctx.beginPath();
+        ctx.arc(0, -c.height * 0.5, c.height * 0.62, Math.PI, 0);
+        ctx.fill();
+
+      } else {
+        // Tube coral: rounded rect cylinders with tip highlights
+        const count = Math.max(2, Math.floor(c.width / 11));
+        for (let i = 0; i < count; i++) {
+          const tx = (i - (count - 1) / 2) * 11;
+          const th = c.height * (0.65 + (i % 2) * 0.25);
+          ctx.globalAlpha = 0.85;
+          ctx.fillStyle   = c.color;
+          ctx.beginPath();
+          ctx.roundRect(tx - 4, -th, 8, th, 4);
+          ctx.fill();
+          // Tip highlight
+          ctx.fillStyle   = '#ffffff';
+          ctx.globalAlpha = 0.45;
+          ctx.beginPath();
+          ctx.arc(tx, -th, 3.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    }
+
+    // --- Fish ---
+    function rasterizeFish(f, transform) {
+      const { facing, tilt } = transform;
+
+      ctx.save();
+      // GEOMETRY → RASTERIZATION handoff:
+      // Apply world-space transform (translate + rotate + flip)
+      ctx.translate(f.x, f.y);
+      ctx.rotate(tilt);
+      ctx.scale(facing, 1);   // flip horizontally based on direction
+
+      const s    = f.size;
+      const tail = Math.sin(f.tailPhase) * s * 0.52;
+
+      if (wireframe) {
+        // WIREFRAME VIEW: show raw geometric outlines only
+        // (demonstrates the geometry stage output before fill)
+        ctx.strokeStyle = '#00FFAA';
+        ctx.lineWidth   = 1;
+
+        // Body ellipse
+        ctx.beginPath();
+        ctx.ellipse(0, 0, s, s * 0.5, 0, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Tail triangle
+        ctx.beginPath();
+        ctx.moveTo(-s * 0.7, 0);
+        ctx.lineTo(-s * 1.45, tail);
+        ctx.lineTo(-s * 1.45, -tail);
+        ctx.closePath();
+        ctx.stroke();
+
+        // Dorsal fin
+        ctx.beginPath();
+        ctx.moveTo(-s * 0.1, -s * 0.48);
+        ctx.lineTo(s * 0.3,  -s * 0.92);
+        ctx.lineTo(s * 0.62, -s * 0.48);
+        ctx.closePath();
+        ctx.stroke();
+
+        // Eye
+        ctx.beginPath();
+        ctx.arc(s * 0.44, -s * 0.1, s * 0.14, 0, Math.PI * 2);
+        ctx.stroke();
+
+      } else {
+        // RASTERIZATION: filled fish — back to front per part
+
+        // Tail (behind body)
+        ctx.fillStyle = f.finColor;
+        ctx.beginPath();
+        ctx.moveTo(-s * 0.7, 0);
+        ctx.lineTo(-s * 1.45, tail);
+        ctx.lineTo(-s * 1.45, -tail);
+        ctx.closePath();
+        ctx.fill();
+
+        // Body ellipse
+        ctx.fillStyle = f.bodyColor;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, s, s * 0.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Stripe overlay
+        ctx.fillStyle   = f.finColor;
+        ctx.globalAlpha = 0.45;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, s * 0.22, s * 0.46, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+
+        // Dorsal fin
+        ctx.fillStyle = f.finColor;
+        ctx.beginPath();
+        ctx.moveTo(-s * 0.1, -s * 0.46);
+        ctx.lineTo(s * 0.3,  -s * 0.92);
+        ctx.lineTo(s * 0.62, -s * 0.46);
+        ctx.closePath();
+        ctx.fill();
+
+        // Pectoral fin
+        ctx.globalAlpha = 0.6;
+        ctx.beginPath();
+        ctx.ellipse(s * 0.1, s * 0.2, s * 0.22, s * 0.12, 0.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+
+        // Eye white
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(s * 0.44, -s * 0.1, s * 0.15, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Pupil
+        ctx.fillStyle = '#111111';
+        ctx.beginPath();
+        ctx.arc(s * 0.46, -s * 0.1, s * 0.08, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Eye gleam
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(s * 0.48, -s * 0.14, s * 0.03, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+
+    // --- Jellyfish ---
+    function rasterizeJellyfish(j, pulse) {
+      ctx.save();
+      ctx.translate(j.x, j.y);
+      ctx.globalAlpha = j.opacity;
+
+      // GEOMETRY → RASTERIZATION: apply pulse scale deformation
+      const s = j.size * pulse;
+
+      if (wireframe) {
+        // WIREFRAME: dome arc + straight tentacle lines
+        ctx.strokeStyle = '#FF99EE';
+        ctx.lineWidth   = 1;
+
+        ctx.beginPath();
+        ctx.arc(0, 0, s, Math.PI, 0);
+        ctx.stroke();
+
+        // Inner ring
+        ctx.globalAlpha = 0.5;
+        ctx.beginPath();
+        ctx.arc(0, 0, s * 0.65, Math.PI, 0);
+        ctx.stroke();
+
+        ctx.globalAlpha = j.opacity;
+        for (let i = 0; i < j.tentacleCount; i++) {
+          const tx = lerp(-s * 0.8, s * 0.8, i / (j.tentacleCount - 1));
+          ctx.beginPath();
+          ctx.moveTo(tx, 0);
+          ctx.lineTo(tx, s * 2);
+          ctx.stroke();
+        }
+
+      } else {
+        // RASTERIZATION: radial gradient dome + sinusoidal tentacles
+
+        // Dome with radial gradient fill
+        const grad = ctx.createRadialGradient(0, -s * 0.25, s * 0.08, 0, 0, s);
+        grad.addColorStop(0, j.bodyColor + 'DD');
+        grad.addColorStop(1, j.bodyColor + '22');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(0, 0, s, Math.PI, 0);
+        ctx.closePath();
+        ctx.fill();
+
+        // Inner glow ring
+        ctx.strokeStyle  = j.tentacleColor;
+        ctx.lineWidth    = 1.8;
+        ctx.globalAlpha  = j.opacity * 0.55;
+        ctx.beginPath();
+        ctx.arc(0, 0, s * 0.65, Math.PI, 0);
+        ctx.stroke();
+
+        // Tentacles — sinusoidal bezier-approximated curves
+        ctx.globalAlpha = j.opacity * 0.65;
+        ctx.strokeStyle = j.tentacleColor;
+        ctx.lineWidth   = 1;
+
+        for (let i = 0; i < j.tentacleCount; i++) {
+          const tx  = lerp(-s * 0.82, s * 0.82, i / (j.tentacleCount - 1));
+          const len = s * 1.6 + Math.sin(j.pulsePhase + i * 1.3) * s * 0.3;
+          ctx.beginPath();
+          ctx.moveTo(tx, 0);
+          for (let seg = 1; seg <= 14; seg++) {
+            const ty = (seg / 14) * len;
+            const wx = tx + Math.sin(j.pulsePhase * 1.8 + seg * 0.75 + i * 0.9)
+                           * s * 0.38 * (seg / 14);
+            ctx.lineTo(wx, ty);
+          }
+          ctx.stroke();
+        }
+      }
+
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    }
+
+    // --- Bubbles ---
+    function rasterizeBubble(b) {
+      // RASTERIZATION: transparent stroke circle + specular highlight
+      ctx.save();
+      ctx.globalAlpha  = b.opacity;
+      ctx.strokeStyle  = 'rgba(160, 230, 255, 0.85)';
+      ctx.lineWidth    = 0.8;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Specular dot
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+      ctx.beginPath();
+      ctx.arc(b.x - b.r * 0.32, b.y - b.r * 0.32, b.r * 0.32, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // MAIN RENDER LOOP
+    // Each iteration executes all three pipeline stages in order
+    // ──────────────────────────────────────────────────────────
+    function loop(timestamp) {
+      if (!paused) {
+        const t = timestamp * 0.001; // seconds
+        frameCount++;
+
+        // ── ① APPLICATION STAGE ─────────────────────────────
+        // Update simulation state for every object this frame
+
+        fish.forEach(f => {
+          // Timer-based animation
+          f.wobble    += f.wobbleSpeed;
+          f.tailPhase += f.tailSpeed;
+
+          // Sinusoidal vertical drift
+          f.vy += Math.sin(f.wobble) * 0.018;
+          f.vy *= 0.97; // velocity damping
+
+          // Integrate position
+          f.x += f.vx;
+          f.y += f.vy;
+
+          // APPLICATION: world boundary handling
+          if (f.x >  W + 50) f.x = -50;
+          if (f.x < -50)     f.x =  W + 50;
+          if (f.y < 45)      f.vy += 0.06;
+          if (f.y > H - 65)  f.vy -= 0.06;
+        });
+
+        jellies.forEach(j => {
+          j.pulsePhase += j.pulseSpeed;
+          j.x += j.vx + Math.sin(j.pulsePhase * 0.28) * 0.18;
+          j.y += j.vy;
+
+          // APPLICATION: respawn at bottom when off top edge
+          if (j.y < -j.size * 3.5) {
+            j.y = H + j.size + 20;
+            j.x = Math.random() * W;
+          }
+          if (j.x < -60) j.x = W + 60;
+          if (j.x > W + 60) j.x = -60;
+        });
+
+        bubbles.forEach(b => {
+          b.y += b.vy;
+          b.x += b.vx;
+          if (b.y < -12) {
+            // Respawn at seabed
+            b.y = H + 12;
+            b.x = Math.random() * W;
+          }
+        });
+
+        // Stochastic bubble emission from seabed
+        if (Math.random() < 0.06) bubbles.push(makeBubble());
+        if (bubbles.length > 65)  bubbles.splice(0, 1);
+
+        // Sunray phase drift
+        sunrays.forEach(r => { r.phase += r.speed; });
+
+        // ── ② GEOMETRY STAGE ────────────────────────────────
+        // Compute world-space transforms for all objects
+        // before any pixels are written
+
+        // Per-fish orientation (facing + tilt from velocity)
+        const fishTransforms = fish.map(f => getFishTransform(f));
+
+        // Per-jellyfish pulse scale (sinusoidal deformation)
+        const jellyPulses = jellies.map(j => getJellyPulse(j, timestamp));
+
+        // Per-coral sway (root lateral displacement)
+        const coralSways = corals.map(c => getCoralSway(c, timestamp));
+
+        // Frustum culling: mark fish outside view bounds
+        const fishVisible = fish.map(f => isFishVisible(f));
+
+        // ── ③ RASTERIZATION STAGE ───────────────────────────
+        // Painter's algorithm: draw back-to-front so closer
+        // objects correctly occlude farther ones
+
+        rasterizeBackground(t);                          // layer 0: sky/water
+        corals.forEach((c, i) =>                         // layer 1: coral
+          rasterizeCoral(c, coralSways[i])
+        );
+        rasterizeSeabed();                               // layer 2: floor
+        bubbles.forEach(rasterizeBubble);                // layer 3: bubbles
+        jellies.forEach((j, i) =>                        // layer 4: jellyfish
+          rasterizeJellyfish(j, jellyPulses[i])
+        );
+        fish.forEach((f, i) => {                         // layer 5: fish (front)
+          if (fishVisible[i])
+            rasterizeFish(f, fishTransforms[i]);
+        });
+
+        // ── HUD update ──────────────────────────────────────
+        document.getElementById('stat-fish').textContent   = fish.length;
+        document.getElementById('stat-jelly').textContent  = jellies.length;
+        document.getElementById('stat-frame').textContent  = frameCount;
+      }
+
+      requestAnimationFrame(loop);
+    }
+
+    // ── UI Controls ───────────────────────────────────────────
+    document.getElementById('btn-pause').addEventListener('click', function () {
+      paused = !paused;
+      this.textContent = paused ? '▶ Resume' : '⏸ Pause';
+      this.classList.toggle('active', paused);
+    });
+
+    document.getElementById('btn-fish').addEventListener('click', () => {
+      if (fish.length < 22) fish.push(makeFish());
+    });
+
+    document.getElementById('btn-jelly').addEventListener('click', () => {
+      if (jellies.length < 14) jellies.push(makeJellyfish());
+    });
+
+    document.getElementById('btn-wire').addEventListener('click', function () {
+      wireframe = !wireframe;
+      this.textContent = wireframe ? '🎨 Filled Mode' : '📐 Wireframe Mode';
+      this.classList.toggle('active', wireframe);
+    });
+
+    // ── Start ─────────────────────────────────────────────────
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
